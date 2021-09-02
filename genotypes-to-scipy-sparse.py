@@ -6,6 +6,8 @@ Script to convert genotypes into the scipy sparse matrix format.
 """
 
 import os
+import pickle
+import gzip
 import argparse
 import geneparse
 import pandas as pd
@@ -27,23 +29,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_sparse_mat(triplets, m, n, dtype=np.int8):
-    triplets = np.array(triplets)
-    return scipy.sparse.coo_matrix(
-        (triplets[:, 2], (triplets[:, 0], triplets[:, 1])),
-        shape=(m, n),
-        dtype=dtype
-    )
-
-
-def checkpoint(triplets, m, n, seed, chunks):
-    cur = create_sparse_mat(triplets, m, n)
-    filename = f"{seed}_{len(chunks)}.npz"
-    scipy.sparse.save_npz(filename, cur)
-    chunks.append(filename)
-    return chunks
-
-
 def main():
     args = parse_args()
 
@@ -58,12 +43,10 @@ def main():
             for k, v in token.split("="):
                 kwargs[k] = v
 
-    chunks = []
-    MAX_TRIPLETS = 5e6
-
     n_included_variants = 0
     target_n_variants = args.n_variants if args.n_variants is not None else n
 
+    out = None
     with geneparse.parsers[args.format](args.genotypes, **kwargs) as reader:
         samples = reader.get_samples()
         m = len(samples)
@@ -85,11 +68,18 @@ def main():
             variants.append(g.variant)
 
             vec = np.round(g.genotypes)
-            triplets.extend([
-                (i, j, v) for i, v
-                in enumerate(g.genotypes)
-                if np.round(v) != 0
-            ])
+            mask = np.where(vec != 0)[0]
+
+            col = scipy.sparse.coo_matrix(
+                (vec[mask], (mask, np.zeros(mask.shape[0]))),
+                shape=(m, 1),
+                dtype=np.int8
+            )
+
+            if out is None:
+                out = col
+            else:
+                out = scipy.sparse.hstack((out, col))
 
             if n_included_variants >= target_n_variants:
                 if args.debug:
@@ -97,34 +87,18 @@ def main():
 
                 break
 
-            if len(triplets) > MAX_TRIPLETS:
-                chunks = checkpoint(
-                    triplets, m, target_n_variants, seed, chunks
-                )
-                triplets = []
-
             if args.debug and (j % 100000) == 0:
                 print(j)
 
-    if triplets:
-        chunks = checkpoint(triplets, m, target_n_variants, seed, chunks)
-
-    del triplets
-
-    if n_included_variants != target_n_variants:
-        if args.debug:
-            print(n_included_variants, target_n_variants)
-
-    print("Collapsing chunks")
-    out = scipy.sparse.vstack([
-        scipy.sparse.load_npz(filename) for filename in chunks
-    ], dtype=np.int8)
-
-    for filename in chunks:
-        os.remove(filename)
-
     print("Writing output")
-    scipy.sparse.save_npz("output.npz", out)
+    with gzip.open("output_variants.pkl.gz", "wb") as f:
+        pickle.dump(variants, f)
+
+    with gzip.open("output_samples.txt.gz", "wt") as f:
+        for s in samples:
+            f.write(str(s) + "\n")
+
+    scipy.sparse.save_npz("output_matrix.npz", out)
 
 
 if __name__ == "__main__":
