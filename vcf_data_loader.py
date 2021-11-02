@@ -40,7 +40,7 @@ class FixedSizeVCFChunks(object):
         if create:
             self.create(max_snps_per_chunk)
 
-    def sql_create(self, max_snps_per_chunk):
+    def _sql_create(self):
         cur = self.con.cursor()
 
         cur.execute("drop table if exists chunks")
