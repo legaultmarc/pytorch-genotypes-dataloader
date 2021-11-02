@@ -6,6 +6,7 @@ Script to convert genotypes into the scipy sparse matrix format.
 """
 
 import os
+import time
 import pickle
 import gzip
 import argparse
@@ -16,6 +17,31 @@ import scipy.sparse
 import uuid
 
 
+class Checkpoint(object):
+    def __init__(self, timedelta, checkpoint_f):
+        self.timedelta = timedelta
+        self.t = time.time()
+        self.checkpoint_f = checkpoint_f
+        self.set_next_checkpoint()
+
+    def set_next_checkpoint(self):
+        self.next_checkpoint = self.t + self.timedelta
+
+    def checkpoint(self):
+        """Checks if it should execute the checkpoint_f."""
+        cur = time.time()
+
+        if cur >= self.next_checkpoint:
+            # Do checkpoint.
+            res = self.checkpoint_f()
+
+            # Set next checkpoint.
+            self.t = cur
+            self.set_next_checkpoint()
+
+            return res
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -23,7 +49,7 @@ def parse_args():
     parser.add_argument("--format", "-f", type=str)
     parser.add_argument("--kwargs", type=str, default=None)
     parser.add_argument("--n-variants", type=int, default=None)
-    parser.add_argument("--maf", type=int, default=0.01)
+    parser.add_argument("--maf", type=float, default=0.01)
     parser.add_argument("--debug", action="store_true")
 
     return parser.parse_args()
@@ -44,19 +70,32 @@ def main():
                 kwargs[k] = v
 
     n_included_variants = 0
-    target_n_variants = args.n_variants if args.n_variants is not None else n
 
     out = None
+    def save_matrix():
+        scipy.sparse.save_npz("output_matrix.npz", out)
+
+    checkpoint = Checkpoint(25 * 60, save_matrix)
+
     with geneparse.parsers[args.format](args.genotypes, **kwargs) as reader:
         samples = reader.get_samples()
         m = len(samples)
         n = reader.get_number_variants()
 
+        if args.n_variants is None:
+            target_n_variants = n
+        else:
+            target_n_variants = args.n_variants
+
         for j, g in enumerate(reader.iter_genotypes()):
+            if g is None:
+                print("Got None genotypes at index {j} (ignoring).")
+                continue
+
             freq = g.coded_freq()
             if freq > 0.5:
                 # Code minor (TODO: Make sure coding is ok when implementing).
-                g = g.flip()
+                g.flip()
                 maf = 1 - freq
             else:
                 maf = freq
@@ -90,6 +129,8 @@ def main():
             if args.debug and (j % 100000) == 0:
                 print(j)
 
+            checkpoint.checkpoint()
+
     print("Writing output")
     with gzip.open("output_variants.pkl.gz", "wb") as f:
         pickle.dump(variants, f)
@@ -98,7 +139,7 @@ def main():
         for s in samples:
             f.write(str(s) + "\n")
 
-    scipy.sparse.save_npz("output_matrix.npz", out)
+    save_matrix()
 
 
 if __name__ == "__main__":
