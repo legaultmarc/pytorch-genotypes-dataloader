@@ -1,14 +1,11 @@
 from dataclasses import dataclass
 import typing
 import sqlite3
-import gzip
 import os
 
 import cyvcf2
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-import pytorch_lightning as pl
 
 
 VERBOSE = True
@@ -43,6 +40,7 @@ class VCFChunk:
         return (
             f"<Chunk #{self.chunk_id} - {self.chrom}:{self.start}-{self.end}>"
         )
+
 
 class FixedSizeVCFChunks(object):
     """Create chunks of variants from a VCF."""
@@ -87,7 +85,8 @@ class FixedSizeVCFChunks(object):
             "  pos integer not null, "
             "  ref text not null, "
             "  alt text not null, "
-            "  constraint chunk_fk foreign key (chunk_id) references chunks (id)"
+            "  constraint chunk_fk "
+            "    foreign key (chunk_id) references chunks (id)"
             ");"
         )
         self.con.commit()
@@ -210,9 +209,9 @@ def _parse_vcf_genotypes_additive(genotypes):
 #         super().__init__()
 #         self.vcf_filename = vcf_filename
 #         self.batch_size = batch_size
-# 
+#
 #     def setup(self):
 #         pass
-# 
+#
 #     def train_dataloader(self):
 #         return DataLoader()
