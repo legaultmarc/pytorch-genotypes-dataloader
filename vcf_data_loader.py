@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import collections
 import typing
 import sqlite3
 import os
@@ -45,6 +46,9 @@ class VCFChunk:
 class FixedSizeVCFChunks(object):
     """Create chunks of variants from a VCF."""
 
+    _Chunk = collections.namedtuple("_Chunk", ("id", "chrom", "start", "end",
+                                               "n_variants"))
+
     def __init__(self, vcf_filename, max_snps_per_chunk=200000, create=False):
         self.vcf_filename = vcf_filename
 
@@ -53,6 +57,33 @@ class FixedSizeVCFChunks(object):
         self.con = sqlite3.connect(db_filename)
         if create:
             self.create(max_snps_per_chunk)
+
+        # Load the chunk regions in memory.
+        self._load_chunks()
+
+    def _load_chunks(self):
+        cur = self.con.cursor()
+
+        cur.execute(
+            "select chunks.*, counts.n "
+            "from "
+            "  chunks inner join "
+            "  ( "
+            "       select chunk_id, count(*) as n "
+            "       from variants group by chunk_id "
+            "  ) counts on chunks.id=counts.chunk_id;"
+        )
+        self.chunks = [self._Chunk(*tu) for tu in cur.fetchall()]
+
+    def get_chunk_meta(self, chunk_id):
+        li = filter(lambda chunk: chunk.id == chunk_id, self.chunks)
+        li = list(li)
+        if len(li) > 1:
+            raise ValueError()
+        elif len(li) == 0:
+            raise IndexError(chunk_id)
+        
+        return li[0]
 
     def _get_db_name(self):
         if ".vcf.gz" in self.vcf_filename:
@@ -139,19 +170,13 @@ class FixedSizeVCFChunks(object):
         self,
         chunk_id: int
     ) -> typing.Generator[cyvcf2.Variant, None, None]:
-        cur = self.con.cursor()
-        cur.execute(
-            "select chrom, start, end from chunks where id=?", (chunk_id, )
-        )
-        chrom, start, end = cur.fetchone()
+        chunk = self.get_chunk_meta(chunk_id)
         return iter_vcf_wrapper(
-            cyvcf2.VCF(self.vcf_filename)(f"{chrom}:{start}-{end}")
+            cyvcf2.VCF(self.vcf_filename)(f"{chunk.chrom}:{chunk.start}-{chunk.end}")
         )
 
     def get_n_chunks(self):
-        cur = self.con.cursor()
-        cur.execute("select count(*) from chunks")
-        return cur.fetchone()[0]
+        return len(self.chunks)
 
     def get_tensor_for_chunk_id(self, chunk_id):
         # Check how many samples and variants to pre-allocate memory.
@@ -161,13 +186,8 @@ class FixedSizeVCFChunks(object):
         finally:
             vcf.close()
 
-        cur = self.con.cursor()
-        cur.execute(
-            "select count(*) from variants where chunk_id=?", (chunk_id, )
-        )
-        n_snps = cur.fetchone()[0]
-
-        mat = np.empty((n_samples, n_snps), dtype=np.float32)
+        chunk = self.get_chunk_meta(chunk_id)
+        mat = np.empty((n_samples, chunk.n_variants), dtype=np.float32)
 
         for j, v in enumerate(self.iter_vcf_by_chunk_id(chunk_id)):
             mat[:, j] = parse_vcf_genotypes(v.genotypes, format="additive")
