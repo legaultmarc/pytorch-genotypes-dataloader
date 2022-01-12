@@ -75,6 +75,15 @@ class FixedSizeVCFChunks(object):
         )
         self.chunks = [self._Chunk(*tu) for tu in cur.fetchall()]
 
+    def get_samples(self):
+        try:
+            vcf = cyvcf2.VCF(self.vcf_filename)
+            samples = vcf.samples
+        finally:
+            vcf.close()
+
+        return samples
+
     def get_chunk_meta(self, chunk_id):
         li = filter(lambda chunk: chunk.id == chunk_id, self.chunks)
         li = list(li)
@@ -82,7 +91,7 @@ class FixedSizeVCFChunks(object):
             raise ValueError()
         elif len(li) == 0:
             raise IndexError(chunk_id)
-        
+
         return li[0]
 
     def _get_db_name(self):
@@ -172,7 +181,9 @@ class FixedSizeVCFChunks(object):
     ) -> typing.Generator[cyvcf2.Variant, None, None]:
         chunk = self.get_chunk_meta(chunk_id)
         return iter_vcf_wrapper(
-            cyvcf2.VCF(self.vcf_filename)(f"{chunk.chrom}:{chunk.start}-{chunk.end}")
+            cyvcf2.VCF(self.vcf_filename)(
+                f"{chunk.chrom}:{chunk.start}-{chunk.end}"
+            )
         )
 
     def get_n_chunks(self):
@@ -223,15 +234,3 @@ def _parse_vcf_genotypes_additive(genotypes):
         dtype=np.float32,
         count=len(genotypes)
     )
-
-# class VCFDataLoader(pl.LightningDataModule):
-#     def __init__(self, vcf_filename, batch_size=32):
-#         super().__init__()
-#         self.vcf_filename = vcf_filename
-#         self.batch_size = batch_size
-#
-#     def setup(self):
-#         pass
-#
-#     def train_dataloader(self):
-#         return DataLoader()

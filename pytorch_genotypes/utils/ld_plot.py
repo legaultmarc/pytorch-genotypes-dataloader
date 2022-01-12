@@ -1,5 +1,6 @@
 import vcf_data_loader
 
+
 def compute_ld(data):
     n = data.size()[0]
     # Standardize
