@@ -230,7 +230,8 @@ def parse_vcf_genotypes(genotypes, format="additive"):
 
 def _parse_vcf_genotypes_additive(genotypes):
     return np.fromiter(
-        (a + b for a, b, _ in genotypes),
+        (a + b if a != -1 and b != -1 else np.nan
+         for a, b, _ in genotypes),
         dtype=np.float32,
         count=len(genotypes)
     )
