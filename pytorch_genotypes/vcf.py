@@ -122,6 +122,7 @@ class FixedSizeVCFChunks(object):
             "create table variants ( "
             "  chunk_id integer, "
             "  chrom text not null, "
+            "  id text, "
             "  pos integer not null, "
             "  ref text not null, "
             "  alt text not null, "
@@ -148,7 +149,8 @@ class FixedSizeVCFChunks(object):
                 cur_chunk = cur_chunk.next_new(first_variant=v)
                 cur_n = 0
 
-            buf.append([cur_chunk.chunk_id, v.CHROM, v.POS, v.REF, v.ALT[0]])
+            buf.append([cur_chunk.chunk_id, v.CHROM, v.ID, v.POS,
+                        v.REF, v.ALT[0]])
             cur_n += 1
 
             if len(buf) >= 1e6:
@@ -163,7 +165,7 @@ class FixedSizeVCFChunks(object):
 
     def _flush_buffer(self, buf):
         cur = self.con.cursor()
-        cur.executemany("insert into variants values (?, ?, ?, ?, ?)", buf)
+        cur.executemany("insert into variants values (?, ?, ?, ?, ?, ?)", buf)
         return []
 
     def _close_chunk(self, cur_chunk: VCFChunk, last_variant):
@@ -188,6 +190,23 @@ class FixedSizeVCFChunks(object):
 
     def get_n_chunks(self):
         return len(self.chunks)
+
+    def get_variant_metadata_for_chunk_id(self, chunk_id):
+        import pandas as pd
+        cur = self.con.cursor()
+
+        cur.execute(
+            "select chrom, id, pos, ref, alt "
+            "  from variants where chunk_id=? order by pos asc;",
+            (chunk_id, )
+        )
+
+        results = cur.fetchall()
+        if not results:
+            raise ValueError(f"No variants in chunk '{chunk_id}'.")
+
+        return pd.DataFrame(results, columns=["chrom", "id", "pos",
+                                              "ref", "alt"])
 
     def get_tensor_for_chunk_id(self, chunk_id):
         # Check how many samples and variants to pre-allocate memory.
