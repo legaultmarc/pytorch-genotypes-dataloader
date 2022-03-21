@@ -191,7 +191,7 @@ class FixedSizeVCFChunks(object):
     def get_n_chunks(self):
         return len(self.chunks)
 
-    def get_variant_metadata_for_chunk_id(self, chunk_id):
+    def get_variant_metadata_for_chunk_id(self, chunk_id: int):
         import pandas as pd
         cur = self.con.cursor()
 
@@ -222,7 +222,7 @@ class FixedSizeVCFChunks(object):
         for j, v in enumerate(self.iter_vcf_by_chunk_id(chunk_id)):
             mat[:, j] = parse_vcf_genotypes(v.genotypes, format="additive")
 
-        return torch.from_numpy(mat)
+        return torch.from_numpy(mat).to(torch.half)
 
 
 def iter_vcf_wrapper(vcf, biallelic=True, snp=True):

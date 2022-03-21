@@ -1,8 +1,11 @@
 # Introduction
 
-This project aims to facilitate access to genotypes stored in [VCF](http://samtools.github.io/hts-specs/VCFv4.3.pdf) files as [numpy](https://numpy.org/doc/stable/index.html) arrays or [pytorch](https://pytorch.org/) tensors.
+This project aims to facilitate working with genotype data in Pytorch.
 
 In addition to providing read access to VCF files, this package allows chunking the file into a fixed number of genetic variants by constructing an ``sqlite`` database of variant metadata.
+
+We also provide tools to create Pytorch datasets from genotype and/or phenotype
+data.
 
 # Installation
 
@@ -12,6 +15,55 @@ pip install ./pytorch-genotypes-dataloader
 ```
 
 # Example
+
+## Creating a Pytorch dataset of phenotype and genotype data.
+
+First, we need to initialize a backend for access to the genotypes. Backends
+are meant to abstract away storage and data sources while providing reasonably
+fast _per sample_ data access (as opposed to most genotype file format which 
+provide _per variant_ data access).
+
+For now, the only implementation is using [Zarr](https://zarr.readthedocs.io/en/stable/)
+to recode all the genotypes.
+
+This backend can take any [geneparse](https://github.com/pgxcentre/geneparse)
+reader as input allowing support for most commonly used variant formats (_e.g._
+plink, bgen, etc.)
+
+```python
+# Creating the zarr backend from a geneparse reader.
+import geneparse
+from pytorch_genotypes.dataset import ZarrBackend, PhenotypeGeneticDataset
+
+reader = geneparse.parsers["bgen"](
+    "my_filename.bgen", sample_filename="my_filename.sample"
+)
+
+backend = ZarrBackend(
+    reader,  # Any geneparse reader
+    filename_prefix: "output_zarr_filename",  # Output filename
+)
+# Note that there are many other options for variant and sample selection.
+
+# Load phenotype data into a Pandas DataFrame.
+phenotypes = pd.read_csv("my_phenotype_filename.csv")
+
+dataset = PhenotypeGeneticDataset(
+    backend,
+    phenotypes,
+    exogenous_columns=...,  # Add covariable names here
+    endogenous_columns=...,  # Add outcome variable names here
+)
+
+dataset[0]
+# Tuple of tensors corresponding to the genotypes, exogenous variables and
+# endogenous variables.
+
+# dataset is a Pytorch dataset.
+
+```
+
+## Creating chunks from a VCF file.
 
 ```python
 import pytorch_genotypes
@@ -35,14 +87,3 @@ and variant metadata. You can use sqlite3 to see the schema and contents after
 creation. Once it has been created using `create=True`, there is **no need** to create it again.
 
 By default, the chunks hold 200k variants, but this can be changed easily.
-
-# Features and roadmap
-
-This project is very young and most non-trivial tasks require querying
-the sqlite3 database manually. This is relatively straightforward and the VCF object holds a reference to a database connection object (`.con`) which can be used for this purpose.
-
-In the future, I aim to make it more easy to search and extract specific variants or genomic regions.
-
-I would also like to support other file formats.
-
-Feature requests and contributions are welcome.
