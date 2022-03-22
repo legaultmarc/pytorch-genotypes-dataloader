@@ -75,7 +75,7 @@ class PhenotypeGeneticDataset(GeneticDataset):
 
         """
         # Get the genotypes from the backend.
-        geno = self.backend[idx]
+        geno = self.backend[self.idx["geno"][idx]]
         out = [geno]
 
         if self.exog is not None:
