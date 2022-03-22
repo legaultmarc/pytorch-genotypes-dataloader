@@ -45,6 +45,7 @@ class PhenotypeGeneticDataset(GeneticDataset):
         # Infer dtype from backend.
         try:
             dtype = self.backend[0].dtype
+            dtype = getattr(torch, getattr(dtype, "name", "float32"))
         except IndexError:
             dtype = torch.float32
 
@@ -70,7 +71,7 @@ class PhenotypeGeneticDataset(GeneticDataset):
         The return type is a tuple of length 1 to 3 depending on the requested
         endogenous and exogenous variables. The order is always:
 
-            - (genotypes, exogenous, endogenous)        
+            - (genotypes, exogenous, endogenous)
 
         """
         # Get the genotypes from the backend.
@@ -84,6 +85,9 @@ class PhenotypeGeneticDataset(GeneticDataset):
             out.append(self.endog[idx, :])
 
         return tuple(out)
+
+    def __len__(self):
+        return len(self.idx["geno"])
 
     def overlap_samples(self, phenotype_samples):
         genetic_samples = self.backend.get_samples()
