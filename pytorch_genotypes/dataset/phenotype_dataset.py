@@ -51,6 +51,8 @@ class PhenotypeGeneticDataset(GeneticDataset):
 
         # Reorder phenotypes wrt the genetic dataset.
         phenotypes = phenotypes.iloc[self.idx["phen"], :]
+
+        self.exogenous_columns = exogenous_columns
         if exogenous_columns:
             self.exog: Optional[torch.Tensor] = torch.tensor(
                 phenotypes.loc[:, exogenous_columns].values
@@ -58,6 +60,7 @@ class PhenotypeGeneticDataset(GeneticDataset):
         else:
             self.exog = None
 
+        self.endogenous_columns = endogenous_columns
         if endogenous_columns:
             self.endog: Optional[torch.Tensor] = torch.tensor(
                 phenotypes.loc[:, endogenous_columns].values
