@@ -3,19 +3,17 @@ Zarr backend for pytorch genetic datasets.
 """
 
 
-from typing import Set, Iterable, Callable, Optional, List, Tuple
+from typing import Set, Iterable, Optional, List, Tuple
 
 from tqdm import tqdm
 import torch
 import zarr
 import numpy as np
 from numpy.typing import DTypeLike
-from geneparse.core import GenotypesReader, Variant, Genotypes
+from geneparse.core import GenotypesReader, Variant
 
 from .core import GeneticDatasetBackend
-
-
-VariantPredicate = Callable[[Genotypes], bool]
+from .utils import get_selected_samples_and_indexer, VariantPredicate
 
 
 class ZarrCache:
@@ -61,7 +59,10 @@ class ZarrBackend(GeneticDatasetBackend):
         self.prefix = filename_prefix
         self.variants: List[Variant] = []
 
-        self.set_samples(reader, keep_samples)
+        self.samples, self._idx = get_selected_samples_and_indexer(
+            reader, keep_samples
+        )
+
         self.create_zarr(reader, variant_predicates, chunks, dtype, progress)
         self.cache = ZarrCache(self.z)
 
@@ -77,46 +78,6 @@ class ZarrBackend(GeneticDatasetBackend):
     def get_n_variants(self):
         return len(self.variants)
 
-    def set_samples(
-        self,
-        reader: GenotypesReader,
-        keep_samples: Optional[Set[str]]
-    ):
-        file_samples = reader.get_samples()
-
-        if keep_samples is None:
-            self.samples = file_samples
-            self._idx = None
-            return
-
-        file_samples_set = set(file_samples)
-        overlap = file_samples_set & keep_samples
-
-        genetic_sample_type = type(file_samples[0])
-        keep_samples_type = type(next(iter(keep_samples)))
-
-        if genetic_sample_type is not keep_samples_type:
-            raise ValueError(
-                f"Genetic file sample type: '{genetic_sample_type}' is "
-                f"different from provided samples list ('{keep_samples_type}'"
-                ")."
-            )
-
-        if len(overlap) == 0:
-            raise ValueError(
-                "No overlap between keep_samples and genetic dataset."
-            )
-
-        indices = []
-        samples = []
-        for index, sample in enumerate(file_samples):
-            if sample in keep_samples:
-                samples.append(sample)
-                indices.append(index)
-
-        self._idx = np.array(indices, dtype=int)
-        self.samples = sample
-
     def create_zarr(
         self,
         reader: GenotypesReader,
@@ -130,7 +91,11 @@ class ZarrBackend(GeneticDatasetBackend):
         # reader. It is likely that the final number of variants will be
         # smaller because of variants failing a predicate. In that case the
         # zarr array will be resized.
-        zarr_filename = f"{self.prefix}.zarr"
+        if self.prefix.endswith(".zarr"):
+            zarr_filename = self.prefix
+        else:
+            zarr_filename = f"{self.prefix}.zarr"
+
         self._zarr_filename = zarr_filename
 
         n_variants = reader.get_number_variants()
