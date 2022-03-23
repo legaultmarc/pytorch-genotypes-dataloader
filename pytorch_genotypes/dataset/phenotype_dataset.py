@@ -10,6 +10,10 @@ import pandas as pd
 import numpy as np
 
 from .core import GeneticDataset, GeneticDatasetBackend
+from .utils import standardize_features, rescale_standardized
+
+
+_STANDARDIZE_MAX_SAMPLE = 10_000
 
 
 class PhenotypeGeneticDataset(GeneticDataset):
@@ -26,6 +30,7 @@ class PhenotypeGeneticDataset(GeneticDataset):
         phenotypes_sample_id_column: str = "sample_id",
         exogenous_columns: Optional[List[str]] = None,
         endogenous_columns: Optional[List[str]] = None,
+        standardize: bool = False
     ):
         super().__init__(backend)
 
@@ -42,21 +47,15 @@ class PhenotypeGeneticDataset(GeneticDataset):
 
         self.overlap_samples(phenotypes[phenotypes_sample_id_column])
 
-        # Infer dtype from backend.
-        try:
-            dtype = self.backend[0].dtype
-            dtype = getattr(torch, getattr(dtype, "name", "float32"))
-        except IndexError:
-            dtype = torch.float32
-
         # Reorder phenotypes wrt the genetic dataset.
         phenotypes = phenotypes.iloc[self.idx["phen"], :]
 
+        # Prepare requested phenotype data.
         self.exogenous_columns = exogenous_columns
         if exogenous_columns:
             self.exog: Optional[torch.Tensor] = torch.tensor(
                 phenotypes.loc[:, exogenous_columns].values
-            ).to(dtype)
+            )
         else:
             self.exog = None
 
@@ -64,9 +63,63 @@ class PhenotypeGeneticDataset(GeneticDataset):
         if endogenous_columns:
             self.endog: Optional[torch.Tensor] = torch.tensor(
                 phenotypes.loc[:, endogenous_columns].values
-            ).to(dtype)
+            )
         else:
             self.endog = None
+
+        # Standardize everything (phenotype and genotype) if required.
+        if standardize:
+            self._standardize()
+        else:
+            self.scales = None
+
+        # Convert to proper dtypes.
+        # Infer dtype from backend.
+        try:
+            dtype = self.backend[0].dtype
+        except IndexError:
+            dtype = torch.float32
+
+        if self.endog is not None:
+            self.endog = self.endog.to(dtype)
+
+        if self.exog is not None:
+            self.exog = self.exog.to(dtype)
+
+        if self.scales is not None:
+            self.scales["geno"][0].to(dtype)
+            self.scales["geno"][1].to(dtype)
+
+    def _standardize(self):
+        self.scales = None  # Important because of self indexing later on.
+        scales = {}
+
+        if self.exog is not None:
+            self.exog, center, scale = standardize_features(self.exog)
+            scales["exog"] = (center, scale)
+
+        if self.endog is not None:
+            self.endog, center, scale = standardize_features(self.endog)
+            scales["endog"] = (center, scale)
+
+        # Estimate the mean and standard deviation of the genotypes to allow
+        # standardization on the fly.
+        sample_size = min(len(self), _STANDARDIZE_MAX_SAMPLE)
+        sample = np.random.choice(
+            np.arange(len(self)), size=sample_size, replace=False
+        )
+        m = np.empty((sample_size, self.backend.get_n_variants()), dtype=float)
+
+        for i, idx in enumerate(sample):
+            g, _, _ = self[idx]
+            m[i, :] = g
+
+        scales["geno"] = (
+            torch.tensor(np.nanmean(m, axis=0)),
+            torch.tensor(np.nanstd(m, axis=0))
+        )
+
+        self.scales = scales
 
     def __getitem__(self, idx):
         """Retrieve data at index.
@@ -79,6 +132,15 @@ class PhenotypeGeneticDataset(GeneticDataset):
         """
         # Get the genotypes from the backend.
         geno = self.backend[self.idx["geno"][idx]]
+
+        # Apply the standardization if requested.
+        if self.scales is not None:
+            geno -= self.scales["geno"][0]
+            geno /= self.scales["geno"][1]
+
+            # Impute NA to mean (0).
+            geno = torch.nan_to_num(geno, nan=0)
+
         out = [geno]
 
         if self.exog is not None:

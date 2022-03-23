@@ -6,6 +6,7 @@ import os
 from typing import Optional, Set, Iterable, List
 
 from tqdm import tqdm
+import torch
 import numpy as np
 from numpy.typing import DTypeLike
 from geneparse.core import GenotypesReader, Variant
@@ -79,7 +80,7 @@ class NumpyBackend(GeneticDatasetBackend):
         self.m = np.load(self.npz_filename)["arr_0"]
 
     def __getitem__(self, idx):
-        return self.m[idx, :]
+        return torch.tensor(self.m[idx, :])
 
     def get_samples(self):
         return self.samples

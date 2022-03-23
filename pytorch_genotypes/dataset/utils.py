@@ -1,10 +1,45 @@
-from typing import Optional, Set, Callable
+from typing import Optional, Set, Callable, Tuple, Union
 
+import torch
 import numpy as np
 from geneparse.core import GenotypesReader, Genotypes
 
 
 VariantPredicate = Callable[[Genotypes], bool]
+TorchOrNumpyArray = Union[np.ndarray, torch.Tensor]
+
+
+def standardize_features(
+    matrix: TorchOrNumpyArray,
+    impute_to_mean=False
+) -> Tuple[TorchOrNumpyArray, TorchOrNumpyArray, TorchOrNumpyArray]:
+    """Standardize a design matrix of n_samples x n_features.
+
+    The return type is the standardized matrix, the vector used for centering
+    and the vector used for scaling (the standard deviation).
+
+    TODO make better type annotations, e.g. using @overload.
+
+    """
+    center = np.nanmean(matrix, axis=0)
+    scale = np.nanstd(matrix, axis=0)
+
+    matrix -= center
+    matrix /= scale
+
+    if impute_to_mean:
+        matrix = np.nan_to_num(matrix, nan=0)
+
+    return (matrix, center, scale)
+
+
+def rescale_standardized(
+    matrix: TorchOrNumpyArray,
+    center: TorchOrNumpyArray,
+    scale: TorchOrNumpyArray,
+) -> TorchOrNumpyArray:
+    """Inverse operation of standardize_features(...)."""
+    return matrix * scale + center
 
 
 def get_selected_samples_and_indexer(

@@ -151,7 +151,7 @@ class ZarrBackend(GeneticDatasetBackend):
         self.cache = ZarrCache(self.z)
 
     def __getitem__(self, idx):
-        return self.cache.get_zarr_row(idx)
+        return torch.tensor(self.cache.get_zarr_row(idx))
 
 
 class VariantBufferedZarrWriter(object):
