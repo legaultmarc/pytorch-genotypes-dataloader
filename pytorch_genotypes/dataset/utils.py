@@ -9,6 +9,16 @@ VariantPredicate = Callable[[Genotypes], bool]
 TorchOrNumpyArray = Union[np.ndarray, torch.Tensor]
 
 
+def dosage_to_hard_call(matrix: torch.Tensor):
+
+    out = torch.ones_like(matrix, dtype=torch.int)
+
+    out[matrix <= 1/3] = 0
+    out[matrix >= 5/3] = 2
+
+    return out
+
+
 def standardize_features(
     matrix: TorchOrNumpyArray,
     impute_to_mean=False
