@@ -7,7 +7,8 @@ can implement additional logic, for example to include phenotype data.
 """
 
 import pickle
-from typing import List, Type, TypeVar
+from collections import defaultdict
+from typing import List, Type, TypeVar, Tuple
 
 import torch
 from geneparse import Variant
@@ -56,6 +57,26 @@ class GeneticDataset(Dataset):
     def __init__(self, backend: GeneticDatasetBackend):
         super().__init__()
         self.backend = backend
+
+    def load_full_dataset(self) -> Tuple[torch.Tensor, ...]:
+        """Utility function to load everything in memory.
+
+        This is useful for testing datasets or to use with models that don't
+        train by minibatch.
+
+        """
+        tensors = defaultdict(list)
+
+        for i in range(len(self)):
+            datum: Tuple[torch.Tensor, ...] = self[i]
+
+            for j in range(len(datum)):
+                tensors[j].append(datum[j])
+
+        # Merge everything.
+        return tuple((
+            torch.vstack(tensors[j]) for j in range(len(tensors))
+        ))
 
     # Autmatically dispatch to backend by default.
     def __getattr__(self, attr):
