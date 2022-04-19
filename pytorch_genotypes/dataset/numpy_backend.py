@@ -23,6 +23,7 @@ class NumpyBackend(GeneticDatasetBackend):
         keep_samples: Optional[Set[str]] = None,
         variant_predicates: Optional[Iterable[VariantPredicate]] = None,
         dtype: DTypeLike = np.float16,
+        impute_to_mean: bool = True,
         progress: bool = True
     ):
         self.samples, self._idx = get_selected_samples_and_indexer(
@@ -31,13 +32,15 @@ class NumpyBackend(GeneticDatasetBackend):
         self.npz_filename = os.path.abspath(npz_filename)
         self.variants: List[Variant] = []
 
-        self.create_np_matrix(reader, variant_predicates, dtype, progress)
+        self.create_np_matrix(reader, variant_predicates, dtype,
+                              impute_to_mean, progress)
 
     def create_np_matrix(
         self,
         reader: GenotypesReader,
         variant_predicates: Optional[Iterable[VariantPredicate]],
         dtype: DTypeLike,
+        impute_to_mean: bool,
         progress: bool
     ):
         n_variants = reader.get_number_variants()
@@ -58,6 +61,10 @@ class NumpyBackend(GeneticDatasetBackend):
                 genotypes = g.genotypes[self._idx]
             else:
                 genotypes = g.genotypes
+
+            if impute_to_mean:
+                mean = np.nanmean(genotypes)
+                genotypes[np.isnan(genotypes)] = mean
 
             m[:, cur_column] = genotypes.astype(dtype)
             variants.append(g.variant)

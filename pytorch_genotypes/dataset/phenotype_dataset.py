@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 
 from .core import GeneticDataset, GeneticDatasetBackend
-from .utils import standardize_features, rescale_standardized
+from .utils import standardize_features
 
 
 _STANDARDIZE_MAX_SAMPLE = 10_000
@@ -91,7 +91,6 @@ class PhenotypeGeneticDataset(GeneticDataset):
             self.scales["geno"][1].to(dtype)
 
     def _standardize(self):
-        self.scales = None  # Important because of self indexing later on.
         scales = {}
 
         if self.exog is not None:
@@ -102,6 +101,11 @@ class PhenotypeGeneticDataset(GeneticDataset):
             self.endog, center, scale = standardize_features(self.endog)
             scales["endog"] = (center, scale)
 
+        self.scales = scales
+        self.standardize_genotypes()
+
+    def standardize_genotypes(self):
+        scales = {}
         # Estimate the mean and standard deviation of the genotypes to allow
         # standardization on the fly.
         sample_size = min(len(self), _STANDARDIZE_MAX_SAMPLE)
@@ -111,37 +115,49 @@ class PhenotypeGeneticDataset(GeneticDataset):
         m = np.empty((sample_size, self.backend.get_n_variants()), dtype=float)
 
         for i, idx in enumerate(sample):
-            g, _, _ = self[idx]
-            m[i, :] = g
+            m[i, :] = self.backend[idx].numpy()
 
         scales["geno"] = (
             torch.tensor(np.nanmean(m, axis=0)),
             torch.tensor(np.nanstd(m, axis=0))
         )
 
-        self.scales = scales
+        if self.scales is None:
+            self.scales = scales
+        else:
+            self.scales.update(scales)
+
+    def standardized_genotypes_to_dosage(self, genotypes):
+        genotypes *= self.scales["geno"][1]
+        genotypes += self.scales["geno"][0]
+        return genotypes
 
     def __getitem__(self, idx):
         """Retrieve data at index.
 
-        The return type is a tuple of length 1 to 3 depending on the requested
+        The return type is a tuple of length 1 to 4 depending on the requested
         endogenous and exogenous variables. The order is always:
 
-            - (genotypes, exogenous, endogenous)
+            - (genotypes_raw, genotypes_std, exogenous, endogenous)
 
         """
         # Get the genotypes from the backend.
         geno = self.backend[self.idx["geno"][idx]]
+        geno_std = None
 
         # Apply the standardization if requested.
         if self.scales is not None:
-            geno -= self.scales["geno"][0]
-            geno /= self.scales["geno"][1]
+            geno_std = geno - self.scales["geno"][0]
+            geno_std /= self.scales["geno"][1]
 
             # Impute NA to mean (0).
-            geno = torch.nan_to_num(geno, nan=0)
+            geno_std = torch.nan_to_num(geno_std, nan=0)\
+                .to(geno.dtype)
 
         out = [geno]
+
+        if geno_std is not None:
+            out.append(geno_std)
 
         if self.exog is not None:
             out.append(self.exog[idx, :])
