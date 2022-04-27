@@ -4,16 +4,29 @@ Implementation of a dataset that add phenotype data.
 
 
 from typing import Optional, List
+from dataclasses import dataclass
 
 import torch
 import pandas as pd
 import numpy as np
 
 from .core import GeneticDataset, GeneticDatasetBackend
-from .utils import standardize_features
 
 
 _STANDARDIZE_MAX_SAMPLE = 10_000
+
+
+@dataclass
+class StdVariableScaler(object):
+    name: str
+    mean: float
+    std: float
+
+    def scale(self, x):
+        return (x - self.mean) / self.std
+
+    def inverse(self, z):
+        return z * self.std + self.mean
 
 
 class PhenotypeGeneticDataset(GeneticDataset):
@@ -30,10 +43,12 @@ class PhenotypeGeneticDataset(GeneticDataset):
         phenotypes_sample_id_column: str = "sample_id",
         exogenous_columns: Optional[List[str]] = None,
         endogenous_columns: Optional[List[str]] = None,
-        standardize: bool = False
+        standardize_columns: Optional[List[str]] = None,
+        standardize_genotypes: bool = True
     ):
         super().__init__(backend)
 
+        # Check that we can find all the phenotype data.
         expected_cols = {phenotypes_sample_id_column}
         if exogenous_columns is not None:
             expected_cols &= set(exogenous_columns)
@@ -45,12 +60,29 @@ class PhenotypeGeneticDataset(GeneticDataset):
         if missing_cols:
             raise ValueError(f"Missing expected column(s): '{missing_cols}'.")
 
+        # Overlap genetic and phenotype samples.
         self.overlap_samples(phenotypes[phenotypes_sample_id_column])
 
-        # Reorder phenotypes wrt the genetic dataset.
+        # Reorder and select samples in the phenotypes dataset with respect to
+        # their order in the genetic dataset.
         phenotypes = phenotypes.iloc[self.idx["phen"], :]
 
-        # Prepare requested phenotype data.
+        # Standardize phenotypes if requested.
+        if standardize_columns is not None:
+            self.phenotype_scalers: Optional[List] = []
+            for col in standardize_columns:
+                scaler = StdVariableScaler(
+                    col,
+                    phenotypes[col].mean(skipna=True),
+                    phenotypes[col].std(skipna=True)
+                )
+                phenotypes[col] = scaler.scale(phenotypes[col])
+
+                self.phenotype_scalers.append(scaler)
+        else:
+            self.phenotype_scalers = None
+
+        # Prepare tensors from the phenotypes df.
         self.exogenous_columns = exogenous_columns
         if exogenous_columns:
             self.exog: Optional[torch.Tensor] = torch.tensor(
@@ -67,45 +99,13 @@ class PhenotypeGeneticDataset(GeneticDataset):
         else:
             self.endog = None
 
-        # Standardize everything (phenotype and genotype) if required.
-        if standardize:
-            self._standardize()
+        # Standardize genotypes if requested.
+        if standardize_genotypes:
+            self.genotype_scaling_mean_std = self.compute_genotype_scaling()
         else:
-            self.scales = None
+            self.genotype_scaling_mean_std = None
 
-        # Convert to proper dtypes.
-        # Infer dtype from backend.
-        try:
-            dtype = self.backend[0].dtype
-        except IndexError:
-            dtype = torch.float32
-
-        if self.endog is not None:
-            self.endog = self.endog.to(dtype)
-
-        if self.exog is not None:
-            self.exog = self.exog.to(dtype)
-
-        if self.scales is not None:
-            self.scales["geno"][0].to(dtype)
-            self.scales["geno"][1].to(dtype)
-
-    def _standardize(self):
-        scales = {}
-
-        if self.exog is not None:
-            self.exog, center, scale = standardize_features(self.exog)
-            scales["exog"] = (center, scale)
-
-        if self.endog is not None:
-            self.endog, center, scale = standardize_features(self.endog)
-            scales["endog"] = (center, scale)
-
-        self.scales = scales
-        self.standardize_genotypes()
-
-    def standardize_genotypes(self):
-        scales = {}
+    def compute_genotype_scaling(self):
         # Estimate the mean and standard deviation of the genotypes to allow
         # standardization on the fly.
         sample_size = min(len(self), _STANDARDIZE_MAX_SAMPLE)
@@ -117,19 +117,17 @@ class PhenotypeGeneticDataset(GeneticDataset):
         for i, idx in enumerate(sample):
             m[i, :] = self.backend[idx].numpy()
 
-        scales["geno"] = (
+        return (
             torch.tensor(np.nanmean(m, axis=0)),
             torch.tensor(np.nanstd(m, axis=0))
         )
 
-        if self.scales is None:
-            self.scales = scales
-        else:
-            self.scales.update(scales)
-
     def standardized_genotypes_to_dosage(self, genotypes):
-        genotypes *= self.scales["geno"][1]
-        genotypes += self.scales["geno"][0]
+        if self.genotype_scaling_mean_std is None:
+            raise RuntimeError("Genotypes were not standardized.")
+
+        genotypes *= self.genotype_scaling_mean_std[1]
+        genotypes += self.genotype_scaling_mean_std[0]
         return genotypes
 
     def __getitem__(self, idx):
@@ -146,13 +144,12 @@ class PhenotypeGeneticDataset(GeneticDataset):
         geno_std = None
 
         # Apply the standardization if requested.
-        if self.scales is not None:
-            geno_std = geno - self.scales["geno"][0]
-            geno_std /= self.scales["geno"][1]
+        if self.genotype_scaling_mean_std is not None:
+            geno_std = geno - self.genotype_scaling_mean_std[0]
+            geno_std /= self.genotype_scaling_mean_std[1]
 
             # Impute NA to mean (0).
-            geno_std = torch.nan_to_num(geno_std, nan=0)\
-                .to(geno.dtype)
+            geno_std = torch.nan_to_num(geno_std, nan=0)
 
         out = [geno]
 
@@ -171,6 +168,14 @@ class PhenotypeGeneticDataset(GeneticDataset):
         return len(self.idx["geno"])
 
     def overlap_samples(self, phenotype_samples):
+        """Finds overlapping samples between genetic and phenotype dataset.
+
+        Sets indexers:
+
+            self.idx["geno"] is the indices in the genetic backend.
+            self.idx["phen"] is the indices in the phenotype DF.
+
+        """
         genetic_samples = self.backend.get_samples()
         overlap = set(genetic_samples) & set(phenotype_samples)
 
@@ -203,15 +208,7 @@ def make_indexer(left_samples, right_samples):
 
     df = pd.merge(left_df, right_df,
                   left_on="left_id", right_on="right_id",
-                  how="outer")
-
-    # The outer join forces floats for indices so that the missing values are
-    # filled with NA. After dropna, we restore integer types for indices.
-
-    df = df.dropna()
-
-    for col in ("left_idx", "right_idx"):
-        df[col] = df[col].astype(int)
+                  how="inner")
 
     if df.shape[0] == 0:
         raise RuntimeError("Can't index non-overlapping datasets.")
