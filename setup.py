@@ -1,3 +1,4 @@
+from importlib_metadata import entry_points
 from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as fh:
@@ -23,9 +24,15 @@ setup(
         "Operating System :: OS Independent"
     ],
     packages=find_packages(),
+    package_data={"pytorch_genotypes.tests": ["test_data/*"]},
     install_requires=[
         "cyvcf2",
         "numpy",
         "torch"
-    ]
+    ],
+    entry_points={
+        "console_scripts": [
+            "pt-geno-block-trainer=pytorch_genotypes.block_trainer.cli:main"
+        ]
+    }
 )
