@@ -24,18 +24,27 @@ class NumpyBackend(GeneticDatasetBackend):
         variant_predicates: Optional[Iterable[VariantPredicate]] = None,
         dtype: DTypeLike = np.float16,
         impute_to_mean: bool = True,
-        progress: bool = True
+        progress: bool = True,
+        use_absolute_path: bool = True,
+        lazy_pickle: bool = False,
     ):
         self.samples, self._idx = get_selected_samples_and_indexer(
             reader, keep_samples
         )
-        self.npz_filename = os.path.abspath(npz_filename)
+
+        self.lazy_pickle = lazy_pickle
+
+        if use_absolute_path:
+            self.npz_filename = os.path.abspath(npz_filename)
+        else:
+            self.npz_filename = npz_filename
+
         self.variants: List[Variant] = []
 
-        self.create_np_matrix(reader, variant_predicates, dtype,
-                              impute_to_mean, progress)
+        self._create_np_matrix(reader, variant_predicates, dtype,
+                               impute_to_mean, progress)
 
-    def create_np_matrix(
+    def _create_np_matrix(
         self,
         reader: GenotypesReader,
         variant_predicates: Optional[Iterable[VariantPredicate]],
@@ -84,7 +93,8 @@ class NumpyBackend(GeneticDatasetBackend):
 
     def __setstate__(self, state: dict):
         self.__dict__.update(state)
-        self.m = np.load(self.npz_filename)["arr_0"]
+        if not self.lazy_pickle:
+            self.m = np.load(self.npz_filename)["arr_0"]
 
     def __getitem__(self, idx):
         return torch.tensor(self.m[idx, :])
